@@ -1,0 +1,82 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Queensland Fuel Prices",
+        "description": "You can get an API Key from https://www.fuelpricesqld.com.au/",
+        "data": {
+          "apikey": "API Key"
+        }
+      },
+      "origin": {
+        "title": "Where should the radius be measured from?",
+        "menu_options": {
+          "origin_zone": "A fixed zone",
+          "origin_tracked": "A tracked entity (e.g. a phone)"
+        }
+      },
+      "origin_zone": {
+        "title": "Fixed zone",
+        "data": {
+          "zone_entity": "Zone",
+          "radius_km": "Radius (km)"
+        }
+      },
+      "origin_tracked": {
+        "title": "Tracked entity",
+        "description": "The station list follows this entity as it moves.",
+        "data": {
+          "tracked_entity": "Tracked entity",
+          "radius_km": "Radius (km)"
+        }
+      },
+      "fueltype": {
+        "title": "Select fuel types to monitor",
+        "description": "A 'cheapest nearby' sensor is created for each fuel type selected, plus a map entity for every station currently within radius.",
+        "data": {
+          "fueltypes": "Fuel Types"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the Fuel Prices Qld API",
+      "invalid_auth": "API Key is not valid",
+      "unknown": "Unknown error"
+    },
+    "abort": {
+      "already_configured": "This origin is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Where should the radius be measured from?",
+        "menu_options": {
+          "origin_zone": "A fixed zone",
+          "origin_tracked": "A tracked entity (e.g. a phone)"
+        }
+      },
+      "origin_zone": {
+        "title": "Fixed zone",
+        "data": {
+          "zone_entity": "Zone",
+          "radius_km": "Radius (km)"
+        }
+      },
+      "origin_tracked": {
+        "title": "Tracked entity",
+        "description": "The station list follows this entity as it moves.",
+        "data": {
+          "tracked_entity": "Tracked entity",
+          "radius_km": "Radius (km)"
+        }
+      },
+      "fueltype": {
+        "title": "Select fuel types to monitor",
+        "data": {
+          "fueltypes": "Fuel Types"
+        }
+      }
+    }
+  }
+}
