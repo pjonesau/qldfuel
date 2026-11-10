@@ -19,7 +19,8 @@
         "title": "Fixed zone",
         "data": {
           "zone_entity": "Zone",
-          "radius_km": "Radius (km)"
+          "radius_km": "Radius (km)",
+          "scan_interval_minutes": "Poll interval (min)"
         }
       },
       "origin_tracked": {
@@ -27,7 +28,8 @@
         "description": "The station list follows this entity as it moves.",
         "data": {
           "tracked_entity": "Tracked entity",
-          "radius_km": "Radius (km)"
+          "radius_km": "Radius (km)",
+          "scan_interval_minutes": "Poll interval (min)"
         }
       },
       "fueltype": {
@@ -60,7 +62,8 @@
         "title": "Fixed zone",
         "data": {
           "zone_entity": "Zone",
-          "radius_km": "Radius (km)"
+          "radius_km": "Radius (km)",
+          "scan_interval_minutes": "Poll interval (min)"
         }
       },
       "origin_tracked": {
@@ -68,7 +71,8 @@
         "description": "The station list follows this entity as it moves.",
         "data": {
           "tracked_entity": "Tracked entity",
-          "radius_km": "Radius (km)"
+          "radius_km": "Radius (km)",
+          "scan_interval_minutes": "Poll interval (min)"
         }
       },
       "fueltype": {

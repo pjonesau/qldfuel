@@ -25,10 +25,14 @@ from .const import (
     CONF_FUELTYPES,
     CONF_ORIGIN_TYPE,
     CONF_RADIUS_KM,
+    CONF_SCAN_INTERVAL,
     CONF_TRACKED_ENTITY,
     CONF_ZONE_ENTITY,
     DEFAULT_RADIUS_KM,
+    DEFAULT_SCAN_INTERVAL_MINUTES,
     DOMAIN,
+    MAX_SCAN_INTERVAL_MINUTES,
+    MIN_SCAN_INTERVAL_MINUTES,
     ORIGIN_TYPE_TRACKED,
     ORIGIN_TYPE_ZONE,
 )
@@ -53,6 +57,20 @@ def _radius_field(default: float) -> dict[vol.Marker, NumberSelector]:
     }
 
 
+def _scan_interval_field(default: float) -> dict[vol.Marker, NumberSelector]:
+    return {
+        vol.Required(CONF_SCAN_INTERVAL, default=default): NumberSelector(
+            NumberSelectorConfig(
+                min=MIN_SCAN_INTERVAL_MINUTES,
+                max=MAX_SCAN_INTERVAL_MINUTES,
+                step=1,
+                mode=NumberSelectorMode.BOX,
+                unit_of_measurement="min",
+            )
+        )
+    }
+
+
 def _zone_schema(defaults: dict[str, Any]) -> vol.Schema:
     return vol.Schema(
         {
@@ -60,6 +78,9 @@ def _zone_schema(defaults: dict[str, Any]) -> vol.Schema:
                 CONF_ZONE_ENTITY, default=defaults.get(CONF_ZONE_ENTITY, vol.UNDEFINED)
             ): EntitySelector(EntitySelectorConfig(filter={"domain": "zone"})),
             **_radius_field(defaults.get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)),
+            **_scan_interval_field(
+                defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES)
+            ),
         }
     )
 
@@ -73,6 +94,9 @@ def _tracked_schema(defaults: dict[str, Any]) -> vol.Schema:
                 EntitySelectorConfig(filter={"domain": ["device_tracker", "person"]})
             ),
             **_radius_field(defaults.get(CONF_RADIUS_KM, DEFAULT_RADIUS_KM)),
+            **_scan_interval_field(
+                defaults.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES)
+            ),
         }
     )
 
@@ -148,7 +172,7 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="origin_zone", data_schema=_zone_schema(self._data)
             )
         return await self._finish_origin(
-            ORIGIN_TYPE_ZONE, user_input[CONF_ZONE_ENTITY], user_input[CONF_RADIUS_KM]
+            ORIGIN_TYPE_ZONE, user_input[CONF_ZONE_ENTITY], user_input
         )
 
     async def async_step_origin_tracked(
@@ -160,11 +184,11 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="origin_tracked", data_schema=_tracked_schema(self._data)
             )
         return await self._finish_origin(
-            ORIGIN_TYPE_TRACKED, user_input[CONF_TRACKED_ENTITY], user_input[CONF_RADIUS_KM]
+            ORIGIN_TYPE_TRACKED, user_input[CONF_TRACKED_ENTITY], user_input
         )
 
     async def _finish_origin(
-        self, origin_type: str, entity_id: str, radius_km: float
+        self, origin_type: str, entity_id: str, user_input: dict[str, Any]
     ) -> FlowResult:
         """Record the chosen origin, enforce uniqueness, and move on."""
         self._data[CONF_ORIGIN_TYPE] = origin_type
@@ -172,7 +196,8 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._data[CONF_TRACKED_ENTITY] = (
             entity_id if origin_type == ORIGIN_TYPE_TRACKED else None
         )
-        self._data[CONF_RADIUS_KM] = radius_km
+        self._data[CONF_RADIUS_KM] = user_input[CONF_RADIUS_KM]
+        self._data[CONF_SCAN_INTERVAL] = user_input[CONF_SCAN_INTERVAL]
 
         # Fingerprint rather than embed the raw API key, so it isn't carried
         # into unique_id (which isn't covered by the usual data[] redaction
@@ -226,6 +251,7 @@ class QldFuelOptionsFlow(config_entries.OptionsFlow):
             CONF_ZONE_ENTITY: user_input[CONF_ZONE_ENTITY],
             CONF_TRACKED_ENTITY: None,
             CONF_RADIUS_KM: user_input[CONF_RADIUS_KM],
+            CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
         }
         return await self.async_step_fueltype()
 
@@ -242,6 +268,7 @@ class QldFuelOptionsFlow(config_entries.OptionsFlow):
             CONF_ZONE_ENTITY: None,
             CONF_TRACKED_ENTITY: user_input[CONF_TRACKED_ENTITY],
             CONF_RADIUS_KM: user_input[CONF_RADIUS_KM],
+            CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
         }
         return await self.async_step_fueltype()
 

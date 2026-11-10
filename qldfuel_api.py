@@ -15,6 +15,12 @@ from .const import BASE_URL, COUNTRY_AU
 
 _LOGGER = logging.getLogger(__name__)
 
+# The API encodes price in tenths of a cent (e.g. 1899 == 189.9 c/L == $1.899/L).
+# Raw values outside this band are clearly bogus/placeholder data — QLD fuel
+# prices never get anywhere near a $9.99/L raw-value ceiling.
+_RAW_PRICE_MIN = 1
+_RAW_PRICE_MAX = 9990
+
 
 class ApiError(Exception):
     """Raised when the API cannot be reached or returns an unexpected response."""
@@ -117,6 +123,7 @@ class QldFuelAPI:
         sites_by_fuel: dict[int, dict] = {}
         skipped_unknown_site = 0
         skipped_unknown_fuel = 0
+        skipped_invalid_price = 0
         for entry in data["SitePrices"]:
             site = self._sites.get(entry["SiteId"])
             if site is None:
@@ -128,6 +135,11 @@ class QldFuelAPI:
             fuel_name = self._fueltypes.get(fuel_id)
             if fuel_name is None:
                 skipped_unknown_fuel += 1
+                continue
+
+            raw_price = entry["Price"]
+            if not (_RAW_PRICE_MIN < raw_price < _RAW_PRICE_MAX):
+                skipped_invalid_price += 1
                 continue
 
             site_bucket = sites_by_fuel.setdefault(
@@ -147,21 +159,24 @@ class QldFuelAPI:
             )
             site_bucket["prices"][fuel_name] = {
                 "fueltypeid": fuel_id,
-                "price": round(entry["Price"] / 1000, 2),
+                "price": round(raw_price / 1000, 2),
                 "collection_method": entry["CollectionMethod"],
                 "collection_date": entry["TransactionDateUtc"],
             }
 
-        if skipped_unknown_site or skipped_unknown_fuel:
+        skipped_total = skipped_unknown_site + skipped_unknown_fuel + skipped_invalid_price
+        if skipped_total:
             # Expected in small numbers (e.g. a site GetFullSiteDetails didn't
             # return), but a call-order bug (refresh_price before refresh_site
             # / refresh_fueltype) would show up here as a large fraction skipped.
             _LOGGER.debug(
-                "refresh_price skipped %d/%d entries (%d unknown site, %d unknown fuel type)",
-                skipped_unknown_site + skipped_unknown_fuel,
+                "refresh_price skipped %d/%d entries "
+                "(%d unknown site, %d unknown fuel type, %d invalid price)",
+                skipped_total,
                 len(data["SitePrices"]),
                 skipped_unknown_site,
                 skipped_unknown_fuel,
+                skipped_invalid_price,
             )
 
         self._sites_by_fuel = sites_by_fuel

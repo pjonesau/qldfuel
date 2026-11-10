@@ -46,22 +46,26 @@ for it during setup.
    "Queensland Fuel".
 2. Enter your API key.
 3. Choose what the search radius is measured from:
-   - **A fixed zone** — pick an existing HA `zone` entity and a radius.
-   - **A tracked entity** — pick a `device_tracker` or `person` entity and a
-     radius; the station list updates as that entity moves.
+   - **A fixed zone** — pick an existing HA `zone` entity, a radius, and a
+     poll interval.
+   - **A tracked entity** — pick a `device_tracker` or `person` entity, a
+     radius, and a poll interval; the station list updates as that entity
+     moves.
 4. Select which fuel types to track. A "cheapest nearby" sensor is created
    for each one.
 
 You can add multiple entries — for example, one per household member's
 phone, or one for home and one for a regular commute zone.
 
-Origin, radius and fuel type selections can be changed later from the
-integration's **Configure** option without re-adding it.
+Origin, radius, poll interval and fuel type selections can be changed later
+from the integration's **Configure** option without re-adding it.
 
 ## Notes
 
-- Polling interval is 5 minutes, shared across all entries using the same
-  API key.
+- Entries sharing an API key share a single poller against the upstream
+  API — adding another origin never multiplies polling. If those entries
+  request different poll intervals, the shared poller runs at the fastest
+  one currently in use.
 - Station lists only recompute once the tracked entity has moved more than
   ~1 km, so GPS jitter doesn't churn entities.
 
