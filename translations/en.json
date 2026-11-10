@@ -20,7 +20,10 @@
         "data": {
           "zone_entity": "Zone",
           "radius_km": "Radius (km)",
-          "scan_interval_minutes": "Poll interval (min)"
+          "scan_interval_minutes": "Poll interval (1-120 min)"
+        },
+        "data_description": {
+          "scan_interval_minutes": "How often this entry asks to refresh prices. Entries sharing an API key with a different install of this integration (e.g. one for home, one for a tracked phone) poll together at the fastest interval any of them requests."
         }
       },
       "origin_tracked": {
@@ -29,7 +32,10 @@
         "data": {
           "tracked_entity": "Tracked entity",
           "radius_km": "Radius (km)",
-          "scan_interval_minutes": "Poll interval (min)"
+          "scan_interval_minutes": "Poll interval (1-120 min)"
+        },
+        "data_description": {
+          "scan_interval_minutes": "How often this entry asks to refresh prices. Entries sharing an API key with a different install of this integration (e.g. one for home, one for a tracked phone) poll together at the fastest interval any of them requests."
         }
       },
       "fueltype": {
@@ -63,7 +69,10 @@
         "data": {
           "zone_entity": "Zone",
           "radius_km": "Radius (km)",
-          "scan_interval_minutes": "Poll interval (min)"
+          "scan_interval_minutes": "Poll interval (1-120 min)"
+        },
+        "data_description": {
+          "scan_interval_minutes": "How often this entry asks to refresh prices. Entries sharing an API key with a different install of this integration (e.g. one for home, one for a tracked phone) poll together at the fastest interval any of them requests."
         }
       },
       "origin_tracked": {
@@ -72,7 +81,10 @@
         "data": {
           "tracked_entity": "Tracked entity",
           "radius_km": "Radius (km)",
-          "scan_interval_minutes": "Poll interval (min)"
+          "scan_interval_minutes": "Poll interval (1-120 min)"
+        },
+        "data_description": {
+          "scan_interval_minutes": "How often this entry asks to refresh prices. Entries sharing an API key with a different install of this integration (e.g. one for home, one for a tracked phone) poll together at the fastest interval any of them requests."
         }
       },
       "fueltype": {
