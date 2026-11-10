@@ -42,6 +42,34 @@ def haversine_km(origin: tuple[float, float], point: tuple[float, float]) -> flo
     return 2 * EARTH_RADIUS_KM * asin(sqrt(a))
 
 
+def _filter_stations(
+    origin: tuple[float, float],
+    radius_km: float,
+    wanted_fueltypes: set[str],
+    all_sites: dict[Any, dict[str, Any]],
+) -> dict[Any, dict[str, Any]]:
+    """Return sites within radius_km of origin that stock a wanted fuel type.
+
+    Pure function (no HA dependency) so it can be unit tested directly —
+    the HA-facing parts of origin tracking live in OriginManager below.
+    """
+    stations: dict[Any, dict[str, Any]] = {}
+    for site_id, site in all_sites.items():
+        prices = {
+            fuel: price for fuel, price in site["prices"].items() if fuel in wanted_fueltypes
+        }
+        if not prices:
+            continue
+
+        distance = haversine_km(origin, (site["latitude"], site["longitude"]))
+        if distance > radius_km:
+            continue
+
+        stations[site_id] = {**site, "prices": prices, "distance_km": round(distance, 1)}
+
+    return stations
+
+
 class OriginManager:
     """Maintains the set of stations currently within radius of one origin."""
 
@@ -126,26 +154,12 @@ class OriginManager:
                 return
 
         self._origin = new_origin
-        radius_km = self._config[CONF_RADIUS_KM]
-        wanted_fueltypes = set(self._config[CONF_FUELTYPES])
-
         all_sites = self.coordinator.data["sites"] if self.coordinator.data else {}
-        stations: dict[Any, dict[str, Any]] = {}
-        for site_id, site in all_sites.items():
-            prices = {
-                fuel: price
-                for fuel, price in site["prices"].items()
-                if fuel in wanted_fueltypes
-            }
-            if not prices:
-                continue
-
-            distance = haversine_km(new_origin, (site["latitude"], site["longitude"]))
-            if distance > radius_km:
-                continue
-
-            stations[site_id] = {**site, "prices": prices, "distance_km": round(distance, 1)}
-
-        self.stations = stations
+        self.stations = _filter_stations(
+            new_origin,
+            self._config[CONF_RADIUS_KM],
+            set(self._config[CONF_FUELTYPES]),
+            all_sites,
+        )
         for update_callback in list(self._listeners):
             update_callback()

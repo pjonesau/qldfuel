@@ -5,10 +5,11 @@ This client is shared across every config entry that uses the same API key
 dataset, unfiltered. Per-origin radius and fuel-type filtering happens in
 origin_manager.py, not here.
 """
-from datetime import datetime
 import logging
 
 import requests
+
+from homeassistant.util import dt as dt_util
 
 from .const import BASE_URL, COUNTRY_AU
 
@@ -23,29 +24,13 @@ class ApiAuthError(ApiError):
     """Raised when the API rejects the configured subscriber token."""
 
 
-def _get_json(url: str, headers: dict[str, str]) -> dict:
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-    except requests.RequestException as err:
-        raise ApiError(f"Could not reach {url}: {err}") from err
-
-    if response.status_code in (401, 403):
-        raise ApiAuthError(f"API key rejected ({response.status_code})")
-    if response.status_code != 200:
-        raise ApiError(f"Unexpected response {response.status_code} from {url}")
-
-    try:
-        return response.json()
-    except ValueError as err:
-        raise ApiError(f"Invalid JSON from {url}: {err}") from err
-
-
 class QldFuelAPI:
     """Client for the Fuel Prices Qld Subscriber API."""
 
     def __init__(self, access_token: str) -> None:
         self._subscriber_token = str(access_token)
-        self.headers = {"Authorization": f"FPDAPI SubscriberToken={self._subscriber_token}"}
+        self._headers = {"Authorization": f"FPDAPI SubscriberToken={self._subscriber_token}"}
+        self._session = requests.Session()
         self._geolookup2city: dict[int, str] = {}
         self._geolookup3state: dict[int, str] = {}
         self._brands: dict[int, str] = {}
@@ -53,9 +38,25 @@ class QldFuelAPI:
         self._sites: dict[int, dict] = {}
         self._sites_by_fuel: dict[int, dict] = {}
 
+    def _get_json(self, url: str) -> dict:
+        try:
+            response = self._session.get(url, headers=self._headers, timeout=10)
+        except requests.RequestException as err:
+            raise ApiError(f"Could not reach {url}: {err}") from err
+
+        if response.status_code in (401, 403):
+            raise ApiAuthError(f"API key rejected ({response.status_code})")
+        if response.status_code != 200:
+            raise ApiError(f"Unexpected response {response.status_code} from {url}")
+
+        try:
+            return response.json()
+        except ValueError as err:
+            raise ApiError(f"Invalid JSON from {url}: {err}") from err
+
     def refresh_georegion(self) -> None:
         url = f"{BASE_URL}/Subscriber/GetCountryGeographicRegions?countryId={COUNTRY_AU}"
-        data = _get_json(url, self.headers)
+        data = self._get_json(url)
 
         geolookup2city: dict[int, str] = {}
         geolookup3state: dict[int, str] = {}
@@ -76,12 +77,12 @@ class QldFuelAPI:
 
     def refresh_fueltype(self) -> None:
         url = f"{BASE_URL}/Subscriber/GetCountryFuelTypes?countryId={COUNTRY_AU}"
-        data = _get_json(url, self.headers)
+        data = self._get_json(url)
         self._fueltypes = {fuel["FuelId"]: fuel["Name"] for fuel in data["Fuels"]}
 
     def refresh_brand(self) -> None:
         url = f"{BASE_URL}/Subscriber/GetCountryBrands?countryId={COUNTRY_AU}"
-        data = _get_json(url, self.headers)
+        data = self._get_json(url)
         self._brands = {brand["BrandId"]: brand["Name"] for brand in data["Brands"]}
 
     def refresh_site(self) -> None:
@@ -89,7 +90,7 @@ class QldFuelAPI:
             f"{BASE_URL}/Subscriber/GetFullSiteDetails?countryId={COUNTRY_AU}"
             "&geoRegionLevel=3&geoRegionId=1"
         )
-        data = _get_json(url, self.headers)
+        data = self._get_json(url)
 
         sites = {}
         for site in data["S"]:
@@ -111,18 +112,22 @@ class QldFuelAPI:
             f"{BASE_URL}/Price/GetSitesPrices?countryId={COUNTRY_AU}"
             "&geoRegionLevel=3&geoRegionId=1"
         )
-        data = _get_json(url, self.headers)
+        data = self._get_json(url)
 
         sites_by_fuel: dict[int, dict] = {}
+        skipped_unknown_site = 0
+        skipped_unknown_fuel = 0
         for entry in data["SitePrices"]:
             site = self._sites.get(entry["SiteId"])
             if site is None:
                 # Price quoted for a site GetFullSiteDetails didn't return.
+                skipped_unknown_site += 1
                 continue
 
             fuel_id = entry["FuelId"]
             fuel_name = self._fueltypes.get(fuel_id)
             if fuel_name is None:
+                skipped_unknown_fuel += 1
                 continue
 
             site_bucket = sites_by_fuel.setdefault(
@@ -147,6 +152,18 @@ class QldFuelAPI:
                 "collection_date": entry["TransactionDateUtc"],
             }
 
+        if skipped_unknown_site or skipped_unknown_fuel:
+            # Expected in small numbers (e.g. a site GetFullSiteDetails didn't
+            # return), but a call-order bug (refresh_price before refresh_site
+            # / refresh_fueltype) would show up here as a large fraction skipped.
+            _LOGGER.debug(
+                "refresh_price skipped %d/%d entries (%d unknown site, %d unknown fuel type)",
+                skipped_unknown_site + skipped_unknown_fuel,
+                len(data["SitePrices"]),
+                skipped_unknown_site,
+                skipped_unknown_fuel,
+            )
+
         self._sites_by_fuel = sites_by_fuel
 
     def refresh_data(self) -> None:
@@ -159,4 +176,4 @@ class QldFuelAPI:
 
     def get_data(self) -> dict:
         """Return the full, unfiltered statewide site/price dataset."""
-        return {"updated": datetime.now(), "sites": self._sites_by_fuel}
+        return {"updated": dt_util.utcnow(), "sites": self._sites_by_fuel}

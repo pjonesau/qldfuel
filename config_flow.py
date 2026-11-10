@@ -1,6 +1,7 @@
 """Config flow for the Queensland Fuel integration."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from typing import Any
 
@@ -173,7 +174,11 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
         self._data[CONF_RADIUS_KM] = radius_km
 
-        await self.async_set_unique_id(f"{self._data[CONF_APIKEY]}:{entity_id}")
+        # Fingerprint rather than embed the raw API key, so it isn't carried
+        # into unique_id (which isn't covered by the usual data[] redaction
+        # if diagnostics support is ever added).
+        key_fingerprint = hashlib.sha256(self._data[CONF_APIKEY].encode()).hexdigest()[:12]
+        await self.async_set_unique_id(f"{key_fingerprint}:{entity_id}")
         self._abort_if_unique_id_configured()
 
         return await self.async_step_fueltype()
@@ -242,11 +247,12 @@ class QldFuelOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_fueltype(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Edit which fuel types to track."""
-        api = QldFuelAPI(self.config_entry.data[CONF_APIKEY])
-        try:
-            await self.hass.async_add_executor_job(api.refresh_fueltype)
-            fuelnames = sorted(set(api.get_fueltype().values()))
-        except ApiError:
+        # Read from the already-polled shared coordinator instead of firing
+        # another request — its API client's fuel-type lookup is refreshed
+        # on every poll cycle regardless of how many entries share it.
+        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
+        fuelnames = sorted(set(coordinator.api.get_fueltype().values()))
+        if not fuelnames:
             fuelnames = self._current[CONF_FUELTYPES]
 
         if user_input is None:
