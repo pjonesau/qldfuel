@@ -67,8 +67,7 @@ integration's **Configure** option without re-adding it.
 
 ## Support
 
-This is provided as-is, with no support. Feel free to fork it or open a PR,
-but issues may not be addressed.
+This is provided as-is, with no support.
 
 ## License
 
