@@ -10,10 +10,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from homeassistant.components.geo_location import DOMAIN as GEO_LOCATION_DOMAIN
 from homeassistant.components.geo_location import GeolocationEvent
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfLength
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -32,6 +34,29 @@ async def async_setup_entry(
     manager: OriginManager = hass.data[DOMAIN][entry.entry_id]["manager"]
     station_manager = QldFuelStationEntityManager(hass, entry, manager, async_add_entities)
     station_manager.async_setup()
+    _async_purge_orphaned_registry_entries(hass, entry, manager)
+
+
+@callback
+def _async_purge_orphaned_registry_entries(
+    hass: HomeAssistant, entry: ConfigEntry, manager: OriginManager
+) -> None:
+    """Remove registry rows for stations not currently in radius.
+
+    QldFuelStationEntityManager's add/update/delete diffing starts from an
+    empty _known_site_ids on every setup, so it never sees (and never
+    cleans up) a station that was already out of radius before this setup
+    ran — including every one left behind by _handle_delete's previous
+    registry-purge gap. Sweep once here instead.
+    """
+    entity_registry = er.async_get(hass)
+    current_unique_ids = {f"{entry.entry_id}_{site_id}" for site_id in manager.stations}
+    for registry_entry in er.async_entries_for_config_entry(entity_registry, entry.entry_id):
+        if (
+            registry_entry.domain == GEO_LOCATION_DOMAIN
+            and registry_entry.unique_id not in current_unique_ids
+        ):
+            entity_registry.async_remove(registry_entry.entity_id)
 
 
 class QldFuelStationEntityManager:
@@ -118,7 +143,22 @@ class QldFuelStationEvent(GeolocationEvent):
 
     @callback
     def _handle_delete(self) -> None:
-        self.hass.async_create_task(self.async_remove(force_remove=True))
+        """Remove this station's entity, including its registry entry.
+
+        async_remove(force_remove=True) alone only drops the live state —
+        the entity registry row (from this entity's unique_id) is left
+        behind as an orphan ("no longer provided by the integration") for
+        every station that ever passed through radius. Purging the
+        registry entry instead cascades into a full removal (HA fires an
+        EVENT_ENTITY_REGISTRY_UPDATED "remove" which the entity reacts to
+        by removing its own state), so nothing lingers once a station
+        leaves range for good.
+        """
+        entity_registry = er.async_get(self.hass)
+        if self.entity_id in entity_registry.entities:
+            entity_registry.async_remove(self.entity_id)
+        else:
+            self.hass.async_create_task(self.async_remove(force_remove=True))
 
     def _update_from_station(self) -> None:
         station = self._manager.stations.get(self._site_id)
