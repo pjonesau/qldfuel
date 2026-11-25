@@ -5,10 +5,11 @@ within radius of a configurable origin — either a fixed HA zone or a tracked
 entity such as a phone's device_tracker. Recomputes both when the shared
 price data refreshes and when the tracked entity moves, ignoring movement
 smaller than MOVEMENT_THRESHOLD_KM so GPS jitter doesn't churn entities.
+Every coordinator refresh refilters, so new prices always reach the entities.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import logging
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
@@ -18,6 +19,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_FUELTYPES,
+    DEFAULT_TITLE,
     CONF_ORIGIN_TYPE,
     CONF_RADIUS_KM,
     CONF_TRACKED_ENTITY,
@@ -40,6 +42,25 @@ def haversine_km(origin: tuple[float, float], point: tuple[float, float]) -> flo
     dlon = lon2 - lon1
     a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
     return 2 * EARTH_RADIUS_KM * asin(sqrt(a))
+
+
+def origin_entity_id(config: Mapping[str, Any]) -> str:
+    """The zone or tracked entity an entry's radius is measured from."""
+    if config[CONF_ORIGIN_TYPE] == ORIGIN_TYPE_TRACKED:
+        return config[CONF_TRACKED_ENTITY]
+    return config[CONF_ZONE_ENTITY]
+
+
+def entry_title(hass: HomeAssistant, origin: str) -> str:
+    """Entry title naming the origin entity, so entries can be told apart."""
+    state = hass.states.get(origin)
+    name = state.name if state is not None else origin
+    return f"{DEFAULT_TITLE} ({name})"
+
+
+def is_generated_title(title: str) -> bool:
+    """Whether a title came from this integration rather than the user."""
+    return title == DEFAULT_TITLE or title.startswith(f"{DEFAULT_TITLE} (")
 
 
 def _filter_stations(
@@ -114,21 +135,28 @@ class OriginManager:
         """Cancel everything this manager registered."""
         if self._unsub_coordinator is not None:
             self._unsub_coordinator()
+            self._unsub_coordinator = None
         if self._unsub_track_entity is not None:
             self._unsub_track_entity()
+            self._unsub_track_entity = None
+
+    @property
+    def available(self) -> bool:
+        """Whether the shared coordinator's last poll succeeded."""
+        return self.coordinator.last_update_success
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        self._recompute(force=False)
+        # New price data (or a change in availability) must always reach the
+        # entities; the movement threshold only applies to origin moves.
+        self._recompute(force=True)
 
     @callback
     def _handle_entity_moved(self, event: Event[EventStateChangedData]) -> None:
         self._recompute(force=False)
 
     def _origin_entity_id(self) -> str:
-        if self._config[CONF_ORIGIN_TYPE] == ORIGIN_TYPE_TRACKED:
-            return self._config[CONF_TRACKED_ENTITY]
-        return self._config[CONF_ZONE_ENTITY]
+        return origin_entity_id(self._config)
 
     def _get_origin_coords(self) -> tuple[float, float] | None:
         state = self.hass.states.get(self._origin_entity_id())
@@ -141,15 +169,27 @@ class OriginManager:
         return (latitude, longitude)
 
     def _recompute(self, *, force: bool) -> None:
+        """Refilter stations around the origin and notify listeners.
+
+        force=True (setup, new coordinator data) always refilters and
+        notifies. force=False (the tracked entity moved) only does so once
+        the origin has moved at least MOVEMENT_THRESHOLD_KM.
+        """
         new_origin = self._get_origin_coords()
         if new_origin is None:
-            _LOGGER.debug(
-                "Origin %s has no known position, keeping last known stations",
-                self._origin_entity_id(),
-            )
-            return
-
-        if not force and self._origin is not None:
+            if not force:
+                return
+            if self._origin is None:
+                _LOGGER.debug(
+                    "Origin %s has no known position yet, no stations to show",
+                    self._origin_entity_id(),
+                )
+                self._notify_listeners()
+                return
+            # Position currently unknown (e.g. phone not reporting): apply the
+            # fresh prices around the last known position.
+            new_origin = self._origin
+        elif not force and self._origin is not None:
             if haversine_km(self._origin, new_origin) < MOVEMENT_THRESHOLD_KM:
                 return
 
@@ -161,5 +201,8 @@ class OriginManager:
             set(self._config[CONF_FUELTYPES]),
             all_sites,
         )
+        self._notify_listeners()
+
+    def _notify_listeners(self) -> None:
         for update_callback in list(self._listeners):
             update_callback()

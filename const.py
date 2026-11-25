@@ -1,6 +1,8 @@
 """Constants for the Queensland Fuel integration."""
 
 DOMAIN = "qldfuel"
+# Entry titles are "<DEFAULT_TITLE> (<origin name>)"; see origin_manager.entry_title.
+DEFAULT_TITLE = "Queensland Fuel Prices"
 BASE_URL = "https://fppdirectapi-prod.fuelpricesqld.com.au"
 COUNTRY_AU = "21"
 

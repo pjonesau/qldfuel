@@ -71,6 +71,11 @@ class QldFuelCheapestSensor(SensorEntity):
     def _handle_update(self) -> None:
         self.async_write_ha_state()
 
+    @property
+    def available(self) -> bool:
+        """Unavailable while the shared price poll is failing."""
+        return self._manager.available
+
     def _cheapest_station(self) -> tuple[Any, dict[str, Any]] | None:
         candidates = [
             (site_id, station)

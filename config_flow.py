@@ -1,6 +1,7 @@
 """Config flow for the Queensland Fuel integration."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 import hashlib
 import logging
 from typing import Any
@@ -36,6 +37,7 @@ from .const import (
     ORIGIN_TYPE_TRACKED,
     ORIGIN_TYPE_ZONE,
 )
+from .origin_manager import entry_title, is_generated_title, origin_entity_id
 from .qldfuel_api import ApiAuthError, ApiError, QldFuelAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -108,6 +110,26 @@ def _fueltype_schema(fuelnames: list[str], defaults: dict[str, Any]) -> vol.Sche
                 CONF_FUELTYPES, default=defaults.get(CONF_FUELTYPES, [])
             ): cv.multi_select(fuelnames)
         }
+    )
+
+
+def _unique_id(apikey: str, origin: str) -> str:
+    """Unique id for an entry: API key fingerprint plus origin entity.
+
+    Fingerprint rather than embed the raw API key, so it isn't carried into
+    unique_id (which isn't covered by the usual data[] redaction if
+    diagnostics support is ever added).
+    """
+    key_fingerprint = hashlib.sha256(apikey.encode()).hexdigest()[:12]
+    return f"{key_fingerprint}:{origin}"
+
+
+def _unique_id_taken(
+    hass: HomeAssistant, unique_id: str, except_entry_id: str | None = None
+) -> bool:
+    return any(
+        entry.unique_id == unique_id and entry.entry_id != except_entry_id
+        for entry in hass.config_entries.async_entries(DOMAIN)
     )
 
 
@@ -199,11 +221,7 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._data[CONF_RADIUS_KM] = user_input[CONF_RADIUS_KM]
         self._data[CONF_SCAN_INTERVAL] = user_input[CONF_SCAN_INTERVAL]
 
-        # Fingerprint rather than embed the raw API key, so it isn't carried
-        # into unique_id (which isn't covered by the usual data[] redaction
-        # if diagnostics support is ever added).
-        key_fingerprint = hashlib.sha256(self._data[CONF_APIKEY].encode()).hexdigest()[:12]
-        await self.async_set_unique_id(f"{key_fingerprint}:{entity_id}")
+        await self.async_set_unique_id(_unique_id(self._data[CONF_APIKEY], entity_id))
         self._abort_if_unique_id_configured()
 
         return await self.async_step_fueltype()
@@ -217,8 +235,86 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 step_id="fueltype", data_schema=_fueltype_schema(fuelnames, self._data)
             )
 
+        if not user_input[CONF_FUELTYPES]:
+            return self.async_show_form(
+                step_id="fueltype",
+                data_schema=_fueltype_schema(fuelnames, self._data),
+                errors={"base": "no_fueltypes"},
+            )
+
         self._data[CONF_FUELTYPES] = user_input[CONF_FUELTYPES]
-        return self.async_create_entry(title="Queensland Fuel Prices", data=self._data)
+        return self.async_create_entry(
+            title=entry_title(self.hass, origin_entity_id(self._data)), data=self._data
+        )
+
+    async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> FlowResult:
+        """The API key was rejected; ask for a new one."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Validate a replacement key and apply it to every entry using the old one."""
+        reauth_entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            new_key = user_input[CONF_APIKEY]
+            try:
+                await _validate_api_key(self.hass, new_key)
+            except CannotConnect:
+                errors["base"] = "cannot_connect"
+            except InvalidAuth:
+                errors["base"] = "invalid_auth"
+            except Exception:
+                _LOGGER.exception("Unexpected exception validating API key")
+                errors["base"] = "unknown"
+            else:
+                # Entries sharing the old key share one coordinator, so they
+                # all need the new key; one reauth flow covers them all.
+                old_key = reauth_entry.data[CONF_APIKEY]
+                updated: set[str] = set()
+                for entry in self.hass.config_entries.async_entries(DOMAIN):
+                    if entry.entry_id == reauth_entry.entry_id:
+                        continue
+                    if entry.data.get(CONF_APIKEY) != old_key:
+                        continue
+                    self.hass.config_entries.async_update_entry(
+                        entry,
+                        data={**entry.data, CONF_APIKEY: new_key},
+                        unique_id=self._reauth_unique_id(entry, new_key),
+                    )
+                    self.hass.config_entries.async_schedule_reload(entry.entry_id)
+                    updated.add(entry.entry_id)
+                # A key rejected at startup gives every sharing entry its own
+                # reauth flow; this one has fixed them all, so close the rest.
+                for flow in self.hass.config_entries.flow.async_progress_by_handler(
+                    DOMAIN, match_context={"source": config_entries.SOURCE_REAUTH}
+                ):
+                    if flow["context"].get("entry_id") in updated:
+                        self.hass.config_entries.flow.async_abort(flow["flow_id"])
+                return self.async_update_reload_and_abort(
+                    reauth_entry,
+                    data_updates={CONF_APIKEY: new_key},
+                    unique_id=self._reauth_unique_id(reauth_entry, new_key),
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=_user_schema(None),
+            errors=errors,
+        )
+
+    def _reauth_unique_id(
+        self, entry: config_entries.ConfigEntry, new_key: str
+    ) -> str | None:
+        """The entry's unique_id under the new key, keeping the old one on a clash."""
+        new_id = _unique_id(
+            new_key, origin_entity_id({**entry.data, **entry.options})
+        )
+        if _unique_id_taken(self.hass, new_id, except_entry_id=entry.entry_id):
+            return entry.unique_id
+        return new_id
 
     @staticmethod
     @callback
@@ -226,7 +322,7 @@ class QldFuelConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return QldFuelOptionsFlow()
 
 
-class QldFuelOptionsFlow(config_entries.OptionsFlow):
+class QldFuelOptionsFlow(config_entries.OptionsFlowWithReload):
     """Edit radius, origin and fuel types without recreating the entry."""
 
     def __init__(self) -> None:
@@ -242,54 +338,93 @@ class QldFuelOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_origin_zone(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Configure a fixed-zone origin."""
-        if user_input is None:
-            return self.async_show_form(
-                step_id="origin_zone", data_schema=_zone_schema(self._current)
-            )
-        self._options = {
-            CONF_ORIGIN_TYPE: ORIGIN_TYPE_ZONE,
-            CONF_ZONE_ENTITY: user_input[CONF_ZONE_ENTITY],
-            CONF_TRACKED_ENTITY: None,
-            CONF_RADIUS_KM: user_input[CONF_RADIUS_KM],
-            CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
-        }
-        return await self.async_step_fueltype()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            options = {
+                CONF_ORIGIN_TYPE: ORIGIN_TYPE_ZONE,
+                CONF_ZONE_ENTITY: user_input[CONF_ZONE_ENTITY],
+                CONF_TRACKED_ENTITY: None,
+                CONF_RADIUS_KM: user_input[CONF_RADIUS_KM],
+                CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
+            }
+            if not self._origin_taken(options):
+                self._options = options
+                return await self.async_step_fueltype()
+            errors["base"] = "already_configured"
+        return self.async_show_form(
+            step_id="origin_zone",
+            data_schema=_zone_schema({**self._current, **(user_input or {})}),
+            errors=errors,
+        )
 
     async def async_step_origin_tracked(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Configure a tracked-entity origin."""
-        if user_input is None:
-            return self.async_show_form(
-                step_id="origin_tracked", data_schema=_tracked_schema(self._current)
-            )
-        self._options = {
-            CONF_ORIGIN_TYPE: ORIGIN_TYPE_TRACKED,
-            CONF_ZONE_ENTITY: None,
-            CONF_TRACKED_ENTITY: user_input[CONF_TRACKED_ENTITY],
-            CONF_RADIUS_KM: user_input[CONF_RADIUS_KM],
-            CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
-        }
-        return await self.async_step_fueltype()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            options = {
+                CONF_ORIGIN_TYPE: ORIGIN_TYPE_TRACKED,
+                CONF_ZONE_ENTITY: None,
+                CONF_TRACKED_ENTITY: user_input[CONF_TRACKED_ENTITY],
+                CONF_RADIUS_KM: user_input[CONF_RADIUS_KM],
+                CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
+            }
+            if not self._origin_taken(options):
+                self._options = options
+                return await self.async_step_fueltype()
+            errors["base"] = "already_configured"
+        return self.async_show_form(
+            step_id="origin_tracked",
+            data_schema=_tracked_schema({**self._current, **(user_input or {})}),
+            errors=errors,
+        )
+
+    def _origin_taken(self, options: dict[str, Any]) -> bool:
+        """Whether another entry with this API key already uses this origin."""
+        new_id = _unique_id(self.config_entry.data[CONF_APIKEY], origin_entity_id(options))
+        return _unique_id_taken(self.hass, new_id, except_entry_id=self.config_entry.entry_id)
 
     async def async_step_fueltype(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Edit which fuel types to track."""
         # Read from the already-polled shared coordinator instead of firing
-        # another request — its API client's fuel-type lookup is refreshed
-        # on every poll cycle regardless of how many entries share it.
-        coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id]["coordinator"]
-        fuelnames = sorted(set(coordinator.api.get_fueltype().values()))
+        # another request — its API client keeps the fuel-type lookup fresh
+        # (see REFERENCE_REFRESH_SECONDS) regardless of how many entries share it.
+        # The entry may not be loaded (e.g. still retrying setup); fall back
+        # to the fuel types it already has.
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        fuelnames = (
+            sorted(set(entry_data["coordinator"].api.get_fueltype().values()))
+            if entry_data is not None
+            else []
+        )
         if not fuelnames:
             fuelnames = self._current[CONF_FUELTYPES]
 
-        if user_input is None:
+        if user_input is None or not user_input[CONF_FUELTYPES]:
             return self.async_show_form(
                 step_id="fueltype",
                 data_schema=_fueltype_schema(fuelnames, self._current),
+                errors={"base": "no_fueltypes"} if user_input is not None else {},
             )
 
         self._options[CONF_FUELTYPES] = user_input[CONF_FUELTYPES]
+        self._update_entry_identity()
         return self.async_create_entry(title="", data=self._options)
+
+    def _update_entry_identity(self) -> None:
+        """Keep unique_id, and a generated title, in step with the origin."""
+        entry = self.config_entry
+        origin = origin_entity_id(self._options)
+        changes: dict[str, Any] = {}
+        new_id = _unique_id(entry.data[CONF_APIKEY], origin)
+        if new_id != entry.unique_id:
+            changes["unique_id"] = new_id
+        # Only replace titles this integration generated, never a user's own.
+        if origin != origin_entity_id(self._current) and is_generated_title(entry.title):
+            changes["title"] = entry_title(self.hass, origin)
+        if changes:
+            self.hass.config_entries.async_update_entry(entry, **changes)
 
 
 class CannotConnect(HomeAssistantError):

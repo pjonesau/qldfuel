@@ -44,15 +44,24 @@
         "data": {
           "fueltypes": "Fuel Types"
         }
+      },
+      "reauth_confirm": {
+        "title": "Fuel Prices Qld API key rejected",
+        "description": "The API rejected the key in use. Enter a new one; every entry that used the old key will be updated.",
+        "data": {
+          "apikey": "API Key"
+        }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to the Fuel Prices Qld API",
       "invalid_auth": "API Key is not valid",
-      "unknown": "Unknown error"
+      "unknown": "Unknown error",
+      "no_fueltypes": "Select at least one fuel type"
     },
     "abort": {
-      "already_configured": "This origin is already configured"
+      "already_configured": "This origin is already configured",
+      "reauth_successful": "API key updated"
     }
   },
   "options": {
@@ -93,6 +102,10 @@
           "fueltypes": "Fuel Types"
         }
       }
+    },
+    "error": {
+      "already_configured": "Another entry with this API key already uses this origin",
+      "no_fueltypes": "Select at least one fuel type"
     }
   }
 }

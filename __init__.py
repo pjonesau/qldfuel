@@ -8,6 +8,7 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
 from .const import (
     CONF_APIKEY,
@@ -18,11 +19,12 @@ from .const import (
     CONF_TRACKED_ENTITY,
     CONF_ZONE_ENTITY,
     DEFAULT_SCAN_INTERVAL_MINUTES,
+    DEFAULT_TITLE,
     DOMAIN,
 )
 from .coordinator import QldFuelDataCoordinator
-from .origin_manager import OriginManager
-from .qldfuel_api import QldFuelAPI
+from .origin_manager import OriginManager, entry_title, origin_entity_id
+from .qldfuel_api import ApiAuthError, QldFuelAPI
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,7 +72,17 @@ async def _async_get_shared_coordinator(
         coordinator = shared.get(apikey)
         if coordinator is None:
             coordinator = QldFuelDataCoordinator(hass, QldFuelAPI(apikey), scan_interval_minutes)
-            await coordinator.async_config_entry_first_refresh()
+            # async_config_entry_first_refresh needs an entry-bound
+            # coordinator, so do its job here: refresh, then turn a failure
+            # into the setup exception HA expects.
+            await coordinator.async_refresh()
+            if not coordinator.last_update_success:
+                await coordinator.async_shutdown()
+                err = coordinator.last_exception
+                if isinstance(getattr(err, "__cause__", None), ApiAuthError):
+                    raise ConfigEntryAuthFailed("API key rejected") from err
+                raise ConfigEntryNotReady(f"Initial fetch failed: {err}") from err
+            await coordinator.async_register_shutdown()
             shared[apikey] = coordinator
 
         coordinator.ref_count += 1
@@ -103,24 +115,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     config = _entry_config(entry)
+    apikey = entry.data[CONF_APIKEY]
+
+    # Entries made before titles named their origin were all called just
+    # DEFAULT_TITLE; give them a distinguishable one once the origin is known.
+    origin = origin_entity_id(config)
+    if entry.title == DEFAULT_TITLE and hass.states.get(origin) is not None:
+        hass.config_entries.async_update_entry(entry, title=entry_title(hass, origin))
     coordinator = await _async_get_shared_coordinator(
-        hass, entry.data[CONF_APIKEY], entry.entry_id, config[CONF_SCAN_INTERVAL]
+        hass, apikey, entry.entry_id, config[CONF_SCAN_INTERVAL]
     )
 
+    # HA doesn't call async_unload_entry for a setup that raised, so undo
+    # this entry's share of the coordinator and its listeners here.
     manager = OriginManager(hass, coordinator, config)
-    await manager.async_setup()
+    try:
+        await manager.async_setup()
+        # The key is recorded because reauth changes entry.data before the
+        # reload, and unload must release the coordinator it actually joined.
+        hass.data[DOMAIN][entry.entry_id] = {
+            "coordinator": coordinator,
+            "manager": manager,
+            "apikey": apikey,
+        }
+        await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    except Exception:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        await manager.async_unload()
+        await _async_release_shared_coordinator(hass, apikey, entry.entry_id)
+        raise
 
-    hass.data[DOMAIN][entry.entry_id] = {"coordinator": coordinator, "manager": manager}
-
-    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
+    # No update listener: the options flow reloads the entry itself
+    # (OptionsFlowWithReload), and reauth reloads via the flow helpers.
     return True
-
-
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload the entry when its options change."""
-    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -129,6 +156,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if unload_ok:
         entry_data = hass.data[DOMAIN].pop(entry.entry_id)
         await entry_data["manager"].async_unload()
-        await _async_release_shared_coordinator(hass, entry.data[CONF_APIKEY], entry.entry_id)
+        await _async_release_shared_coordinator(hass, entry_data["apikey"], entry.entry_id)
 
     return unload_ok

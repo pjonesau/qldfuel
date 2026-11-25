@@ -6,6 +6,7 @@ dataset, unfiltered. Per-origin radius and fuel-type filtering happens in
 origin_manager.py, not here.
 """
 import logging
+import time
 
 import requests
 
@@ -20,6 +21,10 @@ _LOGGER = logging.getLogger(__name__)
 # prices never get anywhere near a $9.99/L raw-value ceiling.
 _RAW_PRICE_MIN = 1
 _RAW_PRICE_MAX = 9990
+
+# Fuel types, brands, regions and the site list change rarely, so they're
+# refetched on this interval rather than on every price poll.
+REFERENCE_REFRESH_SECONDS = 6 * 60 * 60
 
 
 class ApiError(Exception):
@@ -43,6 +48,7 @@ class QldFuelAPI:
         self._fueltypes: dict[int, str] = {}
         self._sites: dict[int, dict] = {}
         self._sites_by_fuel: dict[int, dict] = {}
+        self._reference_fetched_at: float | None = None
 
     def _get_json(self, url: str) -> dict:
         try:
@@ -159,7 +165,8 @@ class QldFuelAPI:
             )
             site_bucket["prices"][fuel_name] = {
                 "fueltypeid": fuel_id,
-                "price": round(raw_price / 1000, 2),
+                # Dollars per litre, keeping the tenth of a cent (1899 -> 1.899).
+                "price": round(raw_price / 1000, 3),
                 "collection_method": entry["CollectionMethod"],
                 "collection_date": entry["TransactionDateUtc"],
             }
@@ -182,11 +189,21 @@ class QldFuelAPI:
         self._sites_by_fuel = sites_by_fuel
 
     def refresh_data(self) -> None:
-        """Refresh fuel types, brands, sites and prices in one pass."""
-        self.refresh_fueltype()
-        self.refresh_brand()
-        self.refresh_georegion()
-        self.refresh_site()
+        """Refresh prices, and the reference data behind them when it's stale.
+
+        Reference data (fuel types, brands, regions, sites) is refetched at
+        most every REFERENCE_REFRESH_SECONDS; prices are fetched every call.
+        """
+        now = time.monotonic()
+        if (
+            self._reference_fetched_at is None
+            or now - self._reference_fetched_at >= REFERENCE_REFRESH_SECONDS
+        ):
+            self.refresh_fueltype()
+            self.refresh_brand()
+            self.refresh_georegion()
+            self.refresh_site()
+            self._reference_fetched_at = now
         self.refresh_price()
 
     def get_data(self) -> dict:

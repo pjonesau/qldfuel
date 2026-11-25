@@ -141,6 +141,11 @@ class QldFuelStationEvent(GeolocationEvent):
         self._update_from_station()
         self.async_write_ha_state()
 
+    @property
+    def available(self) -> bool:
+        """Unavailable while the shared price poll is failing."""
+        return self._manager.available
+
     @callback
     def _handle_delete(self) -> None:
         """Remove this station's entity, including its registry entry.

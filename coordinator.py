@@ -3,15 +3,17 @@
 One instance is created per API key and reused across every config entry
 that shares that key (e.g. one entry per tracked phone), so adding another
 origin never multiplies polling against the upstream API. Lifecycle is
-managed in __init__.py via reference counting.
+managed in __init__.py via reference counting, so the coordinator is
+deliberately not bound to any one config entry: HA shuts an entry-bound
+coordinator down when that entry unloads, which would stop polling for every
+other entry still sharing it.
 """
 from __future__ import annotations
 
 from datetime import timedelta
 import logging
 
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .qldfuel_api import ApiAuthError, ApiError, QldFuelAPI
@@ -26,6 +28,7 @@ class QldFuelDataCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=None,
             name="Queensland Fuel Price Coordinator",
             update_interval=timedelta(minutes=update_interval_minutes),
         )
@@ -40,8 +43,27 @@ class QldFuelDataCoordinator(DataUpdateCoordinator):
         try:
             await self.hass.async_add_executor_job(self.api.refresh_data)
         except ApiAuthError as err:
-            raise ConfigEntryAuthFailed from err
+            # UpdateFailed rather than ConfigEntryAuthFailed: HA returns early
+            # on the latter without notifying listeners, which would leave
+            # entities showing stale prices as available. Reauth is started
+            # here since HA can't start it for an unbound coordinator.
+            self._async_start_reauth()
+            raise UpdateFailed(f"API key rejected: {err}") from err
         except ApiError as err:
             raise UpdateFailed(f"Error communicating with API: {err}") from err
 
         return self.api.get_data()
+
+    @callback
+    def _async_start_reauth(self) -> None:
+        """Ask for a new API key on behalf of every entry sharing this one.
+
+        Not being bound to a config entry, the coordinator can't rely on HA
+        to start reauth. One flow is enough: completing it updates every
+        entry that uses the rejected key (see config_flow.py).
+        """
+        for entry_id in self.entry_intervals:
+            entry = self.hass.config_entries.async_get_entry(entry_id)
+            if entry is not None:
+                entry.async_start_reauth(self.hass)
+                return

@@ -55,7 +55,8 @@ for it during setup.
    for each one.
 
 You can add multiple entries — for example, one per household member's
-phone, or one for home and one for a regular commute zone.
+phone, or one for home and one for a regular commute zone. Each entry is
+named after its origin, e.g. "Queensland Fuel Prices (Home)".
 
 Origin, radius, poll interval and fuel type selections can be changed later
 from the integration's **Configure** option without re-adding it.
@@ -66,8 +67,15 @@ from the integration's **Configure** option without re-adding it.
   API — adding another origin never multiplies polling. If those entries
   request different poll intervals, the shared poller runs at the fastest
   one currently in use.
-- Station lists only recompute once the tracked entity has moved more than
+- Prices refresh on every poll. When the origin is a tracked entity, the
+  station list is only recomputed for movement once it has moved more than
   ~1 km, so GPS jitter doesn't churn entities.
+- Prices are in dollars per litre to the tenth of a cent (e.g. 1.899).
+- Station names, brands and locations are refreshed every 6 hours; prices on
+  every poll.
+- While polling fails, the sensors and map entities show as unavailable.
+- If the API rejects your key, Home Assistant asks you to re-authenticate.
+  The new key is applied to every entry that used the old one.
 
 ## Support
 

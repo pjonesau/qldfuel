@@ -5,7 +5,7 @@ without making any real HTTP requests.
 """
 from unittest.mock import patch
 
-from qldfuel.qldfuel_api import QldFuelAPI
+from qldfuel.qldfuel_api import REFERENCE_REFRESH_SECONDS, ApiError, QldFuelAPI
 
 
 def _api_with_fixtures():
@@ -51,4 +51,60 @@ def test_refresh_price_keeps_valid_price():
     with patch.object(api, "_get_json", return_value={"SitePrices": [_price_entry(1899)]}):
         api.refresh_price()
 
-    assert api._sites_by_fuel[100]["prices"]["Unleaded 91"]["price"] == 1.9
+    assert api._sites_by_fuel[100]["prices"]["Unleaded 91"]["price"] == 1.899
+
+
+def _stub_reference_refreshes(api):
+    calls = []
+    for name in ("refresh_fueltype", "refresh_brand", "refresh_georegion", "refresh_site"):
+        setattr(api, name, lambda name=name: calls.append(name))
+    api.refresh_price = lambda: calls.append("refresh_price")
+    return calls
+
+
+def test_refresh_data_reuses_reference_data_within_interval():
+    api = QldFuelAPI("dummy-token")
+    calls = _stub_reference_refreshes(api)
+
+    with patch("qldfuel.qldfuel_api.time.monotonic", side_effect=[1000.0, 1060.0]):
+        api.refresh_data()
+        api.refresh_data()
+
+    assert calls.count("refresh_site") == 1
+    assert calls.count("refresh_fueltype") == 1
+    assert calls.count("refresh_price") == 2
+
+
+def test_refresh_data_refetches_reference_data_after_interval():
+    api = QldFuelAPI("dummy-token")
+    calls = _stub_reference_refreshes(api)
+
+    with patch(
+        "qldfuel.qldfuel_api.time.monotonic",
+        side_effect=[1000.0, 1000.0 + REFERENCE_REFRESH_SECONDS],
+    ):
+        api.refresh_data()
+        api.refresh_data()
+
+    assert calls.count("refresh_site") == 2
+    assert calls.count("refresh_price") == 2
+
+
+def test_refresh_data_retries_reference_data_after_a_failure():
+    api = QldFuelAPI("dummy-token")
+    calls = _stub_reference_refreshes(api)
+
+    def fail():
+        raise ApiError("boom")
+
+    api.refresh_site = fail
+    with patch("qldfuel.qldfuel_api.time.monotonic", return_value=1000.0):
+        try:
+            api.refresh_data()
+        except ApiError:
+            pass
+        api.refresh_site = lambda: calls.append("refresh_site")
+        api.refresh_data()
+
+    assert calls.count("refresh_site") == 1
+    assert calls.count("refresh_fueltype") == 2
