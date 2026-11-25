@@ -88,7 +88,7 @@ def test_filter_stations_boundary_radius_is_inclusive():
 # --- OriginManager recompute behaviour, against a mocked hass/coordinator ---
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from qldfuel.const import (
     CONF_FUELTYPES,
@@ -217,7 +217,14 @@ def test_entry_title_names_the_origin():
     assert entry_title(hass, "zone.home") == "Queensland Fuel Prices (Home)"
 
     hass.states.get.return_value = None
-    assert entry_title(hass, "zone.work") == "Queensland Fuel Prices (zone.work)"
+    with patch("qldfuel.origin_manager.er") as mock_er:
+        mock_er.async_get.return_value.async_get.return_value = SimpleNamespace(
+            name=None, original_name="Oscar"
+        )
+        assert entry_title(hass, "person.oscar") == "Queensland Fuel Prices (Oscar)"
+
+        mock_er.async_get.return_value.async_get.return_value = None
+        assert entry_title(hass, "zone.work") == "Queensland Fuel Prices (zone.work)"
 
 
 def test_is_generated_title():

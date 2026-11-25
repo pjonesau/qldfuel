@@ -7,8 +7,9 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers.start import async_at_started
 
 from .const import (
     CONF_APIKEY,
@@ -118,10 +119,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     apikey = entry.data[CONF_APIKEY]
 
     # Entries made before titles named their origin were all called just
-    # DEFAULT_TITLE; give them a distinguishable one once the origin is known.
-    origin = origin_entity_id(config)
-    if entry.title == DEFAULT_TITLE and hass.states.get(origin) is not None:
-        hass.config_entries.async_update_entry(entry, title=entry_title(hass, origin))
+    # DEFAULT_TITLE; give them a distinguishable one. A person or
+    # device_tracker origin often has no state yet while HA is starting, so
+    # wait for startup to finish rather than naming it after its entity_id.
+    if entry.title == DEFAULT_TITLE:
+        origin = origin_entity_id(config)
+
+        @callback
+        def _async_rename(_hass: HomeAssistant) -> None:
+            if entry.title == DEFAULT_TITLE:
+                hass.config_entries.async_update_entry(
+                    entry, title=entry_title(hass, origin)
+                )
+
+        if hass.states.get(origin) is not None:
+            _async_rename(hass)
+        else:
+            entry.async_on_unload(async_at_started(hass, _async_rename))
     coordinator = await _async_get_shared_coordinator(
         hass, apikey, entry.entry_id, config[CONF_SCAN_INTERVAL]
     )

@@ -15,6 +15,7 @@ from math import asin, cos, radians, sin, sqrt
 from typing import Any
 
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
@@ -54,7 +55,14 @@ def origin_entity_id(config: Mapping[str, Any]) -> str:
 def entry_title(hass: HomeAssistant, origin: str) -> str:
     """Entry title naming the origin entity, so entries can be told apart."""
     state = hass.states.get(origin)
-    name = state.name if state is not None else origin
+    if state is not None:
+        name = state.name
+    else:
+        registry_entry = er.async_get(hass).async_get(origin)
+        name = (
+            registry_entry is not None
+            and (registry_entry.name or registry_entry.original_name)
+        ) or origin
     return f"{DEFAULT_TITLE} ({name})"
 
 
